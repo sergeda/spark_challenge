@@ -21,7 +21,6 @@ object Main extends IOApp {
       IO(SparkSession
         .builder()
         .appName("Spark project")
-        .master("local[*]")
         .getOrCreate())
     } { sparkSession =>
       IO(sparkSession.close()).handleErrorWith(_ => IO.unit)
@@ -65,7 +64,7 @@ object Main extends IOApp {
       val salesByCategoryAndProductResult = for {
         datast <- dataset
         calculations = new SalesByCategoryAndProductCalculations(datast, spark)
-        categories <- calculations.salesByCategoryAndProductDataset(10)
+        categories <- calculations.salesByCategoryAndProductRdd(10)
         transaction = categories.flatMap{ data => data._2.map( sale => salesByCategoryAndProductRepo.insert(SaleByCategoryAndProduct(0, data._1, sale._1, sale._2)))}.sequence
         _ <- db.transact(transaction)
         _ <- IO(println("Top ten products by sales in each category:\n"))
@@ -79,7 +78,7 @@ object Main extends IOApp {
         datast <- dataset
         calculations = new SumByCountryCalculations(datast, spark, subnetDataFiltered)
         sumsByCountry <- calculations.sumByCountryRddBroadcast(10)
-        transaction = sumsByCountry.map{ tuple => sumByCountryRepo.insert(SumByCountry(0, tuple._1, tuple._2))}.sequence
+        transaction = sumsByCountry.map{ tuple => sumByCountryRepo.insert(SumByCountry(0, tuple._1.toString, tuple._2))}.sequence
         _ <- db.transact(transaction)
         _ <- IO(println("Top ten countries by sum of sales:\n" + sumsByCountry.mkString("\n")))
       } yield sumsByCountry
@@ -90,8 +89,20 @@ object Main extends IOApp {
         _ <- salesByCategoryResult
         _ <- salesByCategoryAndProductResult
         _ <- sumByCountryResult
-      } yield ExitCode.Success
+      } yield {
+        println(timing)
+        ExitCode.Success
+      }
     }
+  }
+
+  val timing = new StringBuffer
+  def timed[T](label: String, code: => T): T = {
+    val start = System.currentTimeMillis()
+    val result = code
+    val stop = System.currentTimeMillis()
+    timing.append(s"Processing $label took ${stop - start} ms.\n")
+    result
   }
 
 }

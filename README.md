@@ -13,5 +13,5 @@ Put queries result from step 5 and 6 result to RDBMS
 
 
 ### How to run
-fill out application.conf and do "sbt run" to run in place or specify path to your config file
+fill out application.conf and do "sbt -Dspark.master=local[*] run" to run in place or specify path to your config file
 sbt assembly to package jar for submitting by spark-submit
