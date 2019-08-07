@@ -8,7 +8,6 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, Dataset, RelationalGroupedDataset, SparkSession}
 import sergey.dashko.{Event, SubnetInfo}
 import sergey.dashko.Main.timed
-
 import scala.reflect.ClassTag
 import scala.util.Try
 
@@ -22,6 +21,8 @@ class IpAddressPartitioner[K : Ordering : ClassTag, V](partitionsNumber: Int, rd
   }
 }
 class SumByCountryCalculations(dataset: Dataset[Event], spark: SparkSession, subnetData: RDD[String]) extends Serializable {
+
+  import spark.implicits._
 
   type Subnet = String
   type CountryId = Int
@@ -75,7 +76,7 @@ class SumByCountryCalculations(dataset: Dataset[Event], spark: SparkSession, sub
   def sumByCountryDatasetsCrossJoin(count: Int): IO[List[(CountryId, Double)]] = IO {
     timed("sumByCountryDatasetsCrossJoin",
       {
-        val subnetDataSet: Dataset[SubnetInfo] = subnetDataParsed.map(data => SubnetInfo(data._2, data._1)).toDF().as[SubnetInfo]
+        val subnetDataSet: Dataset[SubnetInfo] = subnetDataParsed.map(data => SubnetInfo(data._2, data._1)).toDS()
         val crossJoin: DataFrame = subnetDataSet.crossJoin(dataset)
         val groupedDataset: RelationalGroupedDataset = crossJoin.filter(row => ipInSubnet(row.getAs[String]("ip"), row.getAs[String]("network")))
           .map(row => (row.getAs[CountryId]("countryId"), row.getAs[Double]("sum"))).toDF("countryId", "sum")
