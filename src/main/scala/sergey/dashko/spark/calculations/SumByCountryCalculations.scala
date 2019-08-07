@@ -28,12 +28,12 @@ class SumByCountryCalculations(dataset: Dataset[Event], spark: SparkSession, sub
 
   import spark.implicits._
 
-  val subnetDataParsed = {
+  val subnetDataParsed: RDD[(CountryId, Subnet)] = {
     subnetData.map(record => parseLine(record.split(","))).collect{case Some(v) => (v._1, v._2)}
   }
 
 
-  //Geo task solving using RDD and broadcast subnet Map - quickest
+  //1# Geo task solving using RDD and broadcast subnet Map - quickest
   def sumByCountryRddBroadcast(count: Int): IO[List[(CountryId, Double)]] =
     IO {
       timed("sumByCountryRddBroadcast", {
@@ -47,7 +47,7 @@ class SumByCountryCalculations(dataset: Dataset[Event], spark: SparkSession, sub
       )
     }
 
-  //Geo task solving using RDD and cartesian join - second quickest
+  //#2 Geo task solving using RDD and cartesian join - second quickest
   def sumByCountryRddCartesian(count: Int): IO[List[(CountryId, Double)]] = IO {
     val addToMap = (map: Map[CountryId, Double], toAdd: Double, countryId: CountryId) => map.get(countryId).fold(map + (countryId -> toAdd))(currentValue => map + (countryId -> (currentValue + toAdd)))
     val seqOp = (accum: Map[CountryId, Double], element: ((Subnet, CountryId), (String, Double))) => if(ipInSubnet(element._2._1, element._1._1)) addToMap(accum, element._2._2, element._1._2) else accum
@@ -71,7 +71,7 @@ class SumByCountryCalculations(dataset: Dataset[Event], spark: SparkSession, sub
     )
   }
 
-  //Geo task solving using datasets crossJoin - slowest
+  //#3 Geo task solving using datasets crossJoin - slowest
   def sumByCountryDatasetsCrossJoin(count: Int): IO[List[(CountryId, Double)]] = IO {
     timed("sumByCountryDatasetsCrossJoin",
       {
@@ -80,7 +80,22 @@ class SumByCountryCalculations(dataset: Dataset[Event], spark: SparkSession, sub
         val groupedDataset: RelationalGroupedDataset = crossJoin.filter(row => ipInSubnet(row.getAs[String]("ip"), row.getAs[String]("network")))
           .map(row => (row.getAs[CountryId]("countryId"), row.getAs[Double]("sum"))).toDF("countryId", "sum")
           .groupBy("countryId")
-        groupedDataset.sum("sum").toDF("countryId", "sum").sort($"sum".desc).as[(CountryId, Double)].take(count).toList
+        val ds = groupedDataset.sum("sum").toDF("countryId", "sum").sort($"sum".desc).as[(CountryId, Double)]
+        ds.take(count).toList
+      })
+  }
+
+  //#4 Geo task solving using sql and UDF - same as #2
+  def sumByCountrySql(count: Int): IO[List[(CountryId, Double)]] = IO {
+
+    timed("sumByCountrySql",
+      {
+        spark.udf.register( "ipInSubnet", ipInSubnet _ )
+        subnetDataParsed.toDF("countryId", "subnet").createOrReplaceTempView("subnets")
+        dataset.map( event => (event.ip, event.sum)).toDF("ip", "sum").createOrReplaceTempView("events")
+        val df = spark.sql(s"SELECT subnets.countryId, SUM(events.sum) as sum FROM events join subnets ON true where ipInSubnet(events.ip, subnets.subnet) group by subnets.countryId order by sum desc limit ${count}")
+            .as[(CountryId, Double)]
+        df.collect().toList
       })
   }
 
